@@ -1,20 +1,25 @@
 /*
-    1 -> decides how things actually happen, independent of HTTP requests
-    2 -> the only place that talks directly to the database
-    3. -> handles complex sequences
+ * accountService.js
+ *
+ * Single responsibility: all database operations for accounts.
+ * This is the ONLY file that talks directly to the database.
+ * Controllers call these functions — they never touch the DB directly.
+ *
+ * Pattern: services handle business logic + DB queries.
+ * Controllers handle HTTP requests + responses.
  */
 
 import pool from '../db/data.js'
 
-// ===================================================
-// HELPER FUNCTIONS
-// ===================================================
+// ── Helper functions ────────────────────────────────────────────────────────
 
-// reuse: gets account and verification for account creation, edit, update, and deactivate/reactivate
-// client = database connection object
-// accountId = the user trying to deactivate
-// userId = this is WHO is trying to deactivate the account
-// authorization: making sure the person trying to access actually owns the account
+/*
+ * Reusable ownership check — verifies the account exists AND belongs to the
+ * requesting user. Used by any operation that modifies an account.
+ *
+ * Why: authorization must happen at the data layer, not just the route layer.
+ * A user who guesses an account ID should never be able to modify it.
+ */
 async function getAccountWithOwnership(db, accountId, userId) {
     const result = await db.query(
         `SELECT a.id, a.balance, a.status, a.account_type
@@ -23,138 +28,165 @@ async function getAccountWithOwnership(db, accountId, userId) {
         WHERE a.id = $1 AND ao.user_id = $2`,
         [accountId, userId]
     );
-    
-    if (result.rows.length === 0) throw new Error("Account not found.");
-    
+
+    if (result.rows.length === 0) throw new Error('Account not found or access denied.');
+
     return result.rows[0];
 }
 
-// validates that an account can be deactivated
-async function validateAccountForDeactivation(client, accountStatus) {
-    if (accountStatus === 'active') throw new Error(`Cannot deactivate ${accountStatus} account. Contact for assistance.`)
+// ── Account operations ──────────────────────────────────────────────────────
+
+/*
+ * Creates a new account.
+ * initialBalance defaults to 0 — accounts should start empty in production.
+ * accountType defaults to 'checking' — most common account type.
+ */
+export async function createAccount(userId, accountType = 'checking', initialBalance = 0) {
+    if (!userId) throw new Error('User ID is required.');
+    if (initialBalance < 0) throw new Error('Initial balance cannot be negative.');
+
+    const { rows } = await pool.query(
+        `INSERT INTO accounts (user_id, account_type, balance, status)
+         VALUES ($1, $2, $3, 'active')
+         RETURNING id, account_type, balance, status, created_at`,
+        [userId, accountType, initialBalance]
+    );
+
+    return rows[0];
 }
 
+/*
+ * Fetches a single account by ID.
+ * includeInactive: false by default — inactive accounts are effectively deleted
+ * from the user's perspective. Only admin operations pass true.
+ */
+export async function getAccountById(accountId, userId, includeInactive = false) {
+    let query = `
+        SELECT a.id, a.account_type, a.balance, a.status, a.created_at
+        FROM accounts a
+        INNER JOIN account_owner ao ON a.id = ao.account_id
+        WHERE a.id = $1 AND ao.user_id = $2
+    `;
 
+    if (!includeInactive) query += ` AND a.status = 'active'`;
 
+    const { rows } = await pool.query(query, [accountId, userId]);
 
-
-// CREATE ACCOUNT
-export async function createAccount(l_name, f_name, birthday, social, initialBalance = 0, accountType = 'checking') {
-    if (!l_name || !f_name || !birthday || !social) throw new Error('Required fields missing');
-    if (initialBalance < 0) throw new Error('Initial balance cannot be negative.')
-
-    let query = 'INSERT INTO accounts (l_name, f_name, birthday, social, balance, accountType) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *';
-    const params = [l_name, f_name, birthday, social, initialBalance, accountType];
-    const { rows } = await pool.query(query, params);
-    
     return rows[0] || null;
 }
 
-//TODO: by their bday
-export async function getAccountById(id, includeInactive = false) {
-    let query = 'SELECT * FROM accounts WHERE id = $1';
-    const params = [id];
-    
-    if (!includeInactive) query += ' AND is_active = true';
-    
-    const { rows } = await pool.query(query, params);
-    
-    return rows[0] || null;
-}
-
-
-export async function editAccount(id, updates) {
-    // as per CO: only name cannot be edited
-    // no modification -> no timestamp change -> no UPDATE query
+/*
+ * Updates allowed contact fields only.
+ *
+ * Why ALLOWED_FIELDS: never trust the client to tell you what columns to update.
+ * Without this, a malicious user could send { "status": "active", "balance": 99999 }
+ * and update fields they should never touch. This is called mass assignment —
+ * a real vulnerability that has caused production incidents.
+ */
+export async function editAccount(accountId, userId, updates) {
     const ALLOWED_FIELDS = ['phone_number', 'address', 'email'];
-    
-    if ( id === undefined ) return null;
-    
+
     const fields = [];
     const params = [];
     let index = 1;
-    
-    for (let key of ALLOWED_FIELDS) {
+
+    for (const key of ALLOWED_FIELDS) {
         if (updates[key] !== undefined) {
-            // update column (key/'phone_number') using placeholders ($1, $2...)
             fields.push(`${key} = $${index}`);
             params.push(updates[key]);
             index++;
         }
     }
-    
-    // nothing to update
-    if ( fields.length === 0 ) return null;
-    
-    // program quits if there is nothing to update, thus not updating time
+
+    if (fields.length === 0) return null;
+
     fields.push(`updated_at = NOW()`);
-    
-    const query = `
-        UPDATE accounts
-        SET ${fields.join(', ')}
-        WHERE id = $${index}
-        RETURNING *
-    `;
-    
-    params.push(id);
-    
-    const { rows } = await pool.query(query, params);
-    
-    // return (rows.length > 0)? rows[0] : null;
-    if (rows.length === 0) return null;
-    
-    return rows[0];
+    params.push(accountId, userId);
+
+    const { rows } = await pool.query(
+        `UPDATE accounts a
+         SET ${fields.join(', ')}
+         FROM account_owner ao
+         WHERE a.id = ao.account_id
+         AND a.id = $${index}
+         AND ao.user_id = $${index + 1}
+         RETURNING a.id, a.email, a.phone_number, a.address, a.updated_at`,
+        params
+    );
+
+    return rows[0] || null;
 }
 
-
-export async function upgradeAccount(id, newType) {
-    // TODO
-}
-
+/*
+ * Deactivates an account.
+ *
+ * Uses a transaction (BEGIN/COMMIT) because this is a multi-step operation:
+ * 1. verify ownership
+ * 2. verify zero balance
+ * 3. update status
+ *
+ * If any step fails, ROLLBACK undoes everything. The account either fully
+ * deactivates or nothing changes — no partial state. That's ACID compliance.
+ *
+ * Why client instead of pool: pool.query() auto-manages connections.
+ * For transactions, we need ONE dedicated connection held open across
+ * multiple queries. pool.connect() gives us that dedicated connection.
+ * We MUST release() it in finally — or the connection leaks and the pool
+ * eventually runs out of connections.
+ */
 export async function deactivateAccount(accountId, userId, reason) {
+    if (!reason) throw new Error('A reason is required to deactivate an account.');
 
     const client = await pool.connect();
-    
+
     try {
         await client.query('BEGIN');
-        
+
+        // Step 1: verify ownership — throws if not found or not owned
         const account = await getAccountWithOwnership(client, accountId, userId);
-        if (account.status !== 'active')
-        
-    }
-    
-    
-    
 
-    const params = [id];
-    
-    if (id === undefined) return null;
-    
-    const balanceCheck = await pool.query(
-        'SELECT balance FROM accounts WHERE id = $1',
-        [id]
-    );
-    
-    if (balanceCheck.rows[0].balance !== 0) {
-        throw new Error('Cannot deactivate account with non-zero balance.')
-    }
+        // Step 2: business rule — cannot deactivate with remaining balance
+        if (account.balance !== 0) {
+            throw new Error('Account must have zero balance before deactivation.');
+        }
 
-    const query = `
-    UPDATE accounts
-    SET is_active = false,
-        update_at = NOW()
-    WHERE id = $1 AND is_active = true
-    RETURNING *
-    `;
-    
-    const { rows } = await pool.query(query, params);
-    
-    // if the account is already inactive and nothing was returned
-    if (rows.length === 0) return null;
-    
-    return rows[0];
+        // Step 3: status must currently be active
+        if (account.status !== 'active') {
+            throw new Error(`Account is already ${account.status}.`);
+        }
+
+        // Step 4: deactivate
+        const { rows } = await client.query(
+            `UPDATE accounts
+             SET status = 'inactive', updated_at = NOW()
+             WHERE id = $1
+             RETURNING id, status, updated_at`,
+            [accountId]
+        );
+
+        // Step 5: write to audit log
+        await client.query(
+            `INSERT INTO audit_logs (user_id, account_id, action, reason, created_at)
+             VALUES ($1, $2, 'ACCOUNT_DEACTIVATED', $3, NOW())`,
+            [userId, accountId, reason]
+        );
+
+        await client.query('COMMIT');
+
+        return rows[0];
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+
+    } finally {
+        // always runs — even if catch re-throws
+        // this is why finally exists: guaranteed cleanup
+        client.release();
+    }
 }
 
-export async function reactivateAccount(id) {
-    //TODO
-}
+/*
+ * TODO: reactivateAccount — Phase 4
+ * TODO: upgradeAccount — Phase 4
+ */

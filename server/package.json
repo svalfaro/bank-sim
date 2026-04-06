@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix"
   },
   "keywords": [],
   "author": "",
@@ -20,7 +22,11 @@
     "pg": "^8.17.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "dotenv-safe": "^9.1.0",
+    "eslint": "^10.2.0",
+    "globals": "^17.4.0",
     "morgan": "^1.10.1",
-    "nodemon": "^3.1.11"
+    "nodemon": "^3.1.14"
   }
 }
