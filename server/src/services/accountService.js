@@ -14,6 +14,12 @@ import pool from '../db/data.js'
 // ── Helper functions ────────────────────────────────────────────────────────
 
 /*
+ * OWASP A01:2025 BROKEN ACCESS CONTROL
+ * ownership verification happens at the DATA LAYER, not just the route layer
+ * my approach:  verify the query
+ * JOIN account_owner on both account_id AND user_id
+ * if the JOIN returns nothing, access is denied regardless of route guards.
+ * 
  * Reusable ownership check — verifies the account exists AND belongs to the
  * requesting user. Used by any operation that modifies an account.
  *
@@ -76,6 +82,12 @@ export async function getAccountById(accountId, userId, includeInactive = false)
 }
 
 /*
+ * OWASP A01:2025 BROKEN ACCESS CONTROL
+ * mass assignment is a vulnerability where an attacker sends unexpected fields
+ * in a request body to modify columns they should NOT control.
+ * the fix: only explicitly permitted fields reach the database.
+ * the database never sees fields the application didn't approve. *
+ * 
  * Updates allowed contact fields only.
  *
  * Why ALLOWED_FIELDS: never trust the client to tell you what columns to update.
@@ -118,6 +130,12 @@ export async function editAccount(accountId, userId, updates) {
 }
 
 /*
+ * OWASP A06:2025 INSECURE DESIGN
+ * deactivation is a multistep operation; each step must success or
+ * the entire operation rolls back. no partial state is acceptable.
+ *
+ * execution: verify ownership -> check zero balance -> update status -> audit log
+ *
  * Deactivates an account.
  *
  * Uses a transaction (BEGIN/COMMIT) because this is a multi-step operation:

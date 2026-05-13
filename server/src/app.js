@@ -12,13 +12,20 @@ const app = express();
 
 /*
 ------*------- LOGGING ------*-------
+OWASP A09:2025 SECURITY LOGGING AND MONITORING
+first layer of observability; will take notice of unusual patterns: repeated 404s, 401 floods
+in production, morgan output feeds into log aggregation (datadog, splunk)
+
 morgan logs every http req: method, route, status code, response time
 'dev' format: GET /dashboard 200 4.231ms
 */
 app.use(morgan('dev'));
 
 /*
-------*------- TEMPLATE ENGINE ------*-------
+------*------- TEMPLATE ENGINE (HANDLEBARS) ------*-------
+OWASP A05:2025 INJECTION PREVENTION (XSS)
+server-side rendering means the server controls exactly what html
+reaches the browser; no client-side template injection surface.
 tells express to use handlebars for rendering .hbs files
 */
 
