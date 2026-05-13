@@ -13,6 +13,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- never store passwords; google handles authentication
 -- only store what google provides + what we need internally
 -- DATA MINIMIZATION: less data stored = smaller breach surface
+-- OWASP A01:2025 - BROKEN ACCESS CONTROL
 -- ================================================
 CREATE TABLE IF NOT EXISTS users (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -26,7 +27,10 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- ================================================
--- TABLES
+-- ACCOUNTS
+-- OWASP A06:2025 INSECURE DESIGN
+-- 'CHECK' constraints enforce valid states at the database level
+-- NUMERIC over FLOAT for financial (exact) calculations
 -- ================================================
 CREATE TABLE IF NOT EXISTS accounts (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -54,6 +58,10 @@ CREATE INDEX IF NOT EXISTS sessions_expire_idx ON sessions (expire);
 
 -- ================================================
 -- TRANSACTIONS
+-- OWASP A06:2025 INSECURE DESIGN, OWASP A01:2025 BROKEN ACCESS CONTROL
+-- TRANSACTIONS needs to be immutable - no updated columns
+-- corrections requires new transaction to create an audit trail
+-- "Access control enforces policy such that users cannot act outside of their intended permissions."
 -- ================================================
 CREATE TABLE IF NOT EXISTS transactions (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -69,6 +77,9 @@ CREATE TABLE IF NOT EXISTS transactions (
 
 -- ================================================
 -- AUDIT LOGS
+-- OWASP A09 SECURITY LOGGING AND MONITORING FAILURES
+-- captures: who(user_id), what(event_name), when(created_at),
+-- where(ip_address, user_agent), and outcome(status)
 -- ================================================
 CREATE TABLE IF NOT EXISTS audit_logs (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
